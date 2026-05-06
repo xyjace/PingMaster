@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 PingMaster - 带 GUI 的 Ping & 端口检测工具
-用法: python ping_gui.py
+用法: python PingMaster.py
 """
 
 import tkinter as tk
@@ -120,7 +120,8 @@ class PingApp:
         self.btn_go.pack(side="left", padx=(0, 6))
         self.btn_stop = self._btn(bb, "[x] 停止", "#e0a0a0", self._stop, "disabled")
         self.btn_stop.pack(side="left", padx=(0, 6))
-        self._btn(bb, "[ ] 清空", "#b8bcc2", self._clear).pack(side="left")
+        self._btn(bb, "[ ] 清空", "#b8bcc2", self._clear).pack(side="left", padx=(0, 6))
+        self._btn(bb, "[↓] 导出", "#b8c8e0", self._export).pack(side="left")
 
         # 统计栏
         sf = self._card(self.root)
@@ -203,7 +204,7 @@ class PingApp:
                        command=cmd, state=state, borderwidth=0)
         def enter(e):
             if b["state"] != "disabled":
-                b.configure(bg=self._light(color))
+                b.configure(bg=self._brighten_color(color))
         def leave(e):
             if b["state"] != "disabled":
                 b.configure(bg=color)
@@ -211,11 +212,11 @@ class PingApp:
         b.bind("<Leave>", leave)
         return b
 
-    def _light(self, h):
+    def _brighten_color(self, h):
         try:
             r, g, b = int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
-            return f"#{min(255,r+30):02x}{min(255,g+30):02x}{min(255,b+30):02x}"
-        except:
+            return f"#{min(255, r + 30):02x}{min(255, g + 30):02x}{min(255, b + 30):02x}"
+        except Exception:
             return h
 
     # ── 逻辑 ──
@@ -235,12 +236,16 @@ class PingApp:
 
         try:
             count = int(count_s)
+            if count < 1:
+                raise ValueError
         except ValueError:
-            messagebox.showwarning("提示", "次数必须是数字"); return
+            messagebox.showwarning("提示", "次数必须是正整数"); return
         try:
             size = int(size_s)
+            if not 1 <= size <= 65500:
+                raise ValueError
         except ValueError:
-            messagebox.showwarning("提示", "包大小必须是数字"); return
+            messagebox.showwarning("提示", "包大小范围 1-65500"); return
         try:
             ttl = int(ttl_s)
             if not 1 <= ttl <= 255:
@@ -257,9 +262,6 @@ class PingApp:
             except ValueError:
                 messagebox.showwarning("提示", "端口范围 1-65535"); return
 
-        if self.var_cont.get():
-            count = 999999
-
         self.sent = self.recv = 0
         self.rtts = []
         self.start_time = time.time()
@@ -268,9 +270,11 @@ class PingApp:
         self.btn_stop.config(state="normal")
         self._status(f"Pinging {host} ...", C["accent"])
 
+        is_continuous = self.var_cont.get()
+
         if port:
             threading.Thread(target=self._port_check, args=(host, port), daemon=True).start()
-        threading.Thread(target=self._ping, args=(host, count, size, ttl), daemon=True).start()
+        threading.Thread(target=self._ping, args=(host, count, size, ttl, is_continuous), daemon=True).start()
         self._tick()
 
     def _port_check(self, host, port):
@@ -298,23 +302,29 @@ class PingApp:
             s.close()
         self._log(f"{'=' * 50}\n", "dim")
 
-    def _ping(self, host, count, size, ttl):
+    def _ping(self, host, count, size, ttl, is_continuous=False):
         cmd = ["ping"]
         if sys.platform == "win32":
             if self.var_v4.get():
                 cmd.append("-4")
-            cmd += ["-n", str(count), "-l", str(size), "-i", str(ttl), host]
+            if is_continuous:
+                cmd += ["-t", "-l", str(size), "-i", str(ttl), host]
+            else:
+                cmd += ["-n", str(count), "-l", str(size), "-i", str(ttl), host]
         else:
             if self.var_v4.get():
                 cmd.append("-4")
-            cmd += ["-c", str(count), "-s", str(size), "-t", str(ttl), host]
+            if is_continuous:
+                cmd += ["-s", str(size), "-t", str(ttl), host]
+            else:
+                cmd += ["-c", str(count), "-s", str(size), "-t", str(ttl), host]
 
         self._log(f"\n{'=' * 50}", "dim")
         self._log(f"  PING {host} ({size} bytes)", "title")
         self._log(f"{'-' * 50}", "dim")
 
         try:
-            enc = locale.getpreferredencoding() or "gbk" if sys.platform == "win32" else "utf-8"
+            enc = (locale.getpreferredencoding() or "gbk") if sys.platform == "win32" else "utf-8"
             self.process = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding=enc, errors="replace"
@@ -327,7 +337,7 @@ class PingApp:
                 if not line:
                     continue
 
-                # 匹配 RTT
+                # 匹配 RTT（成功响应）
                 m = re.search(r'(?:time|time=|时间[<=])([\d.]+)\s*ms', line)
                 if m:
                     rtt = float(m.group(1))
@@ -339,17 +349,19 @@ class PingApp:
                     self._update()
                     continue
 
+                # 超时 / 不可达（失败响应）
                 if any(k in line.lower() for k in ['timeout', 'timed out', '超时', 'unreachable']):
                     self.sent += 1
                     self._log(f"  {line}", "fail")
                     self._update()
                     continue
 
-                # Windows 中文统计行
+                # Windows 中文统计行（来自 ping 自身的汇总）
                 if sys.platform == "win32" and '平均' in line:
                     self._log(f"  {line}", "info")
                     continue
 
+                # 其他包含有用信息的行
                 if any(k in line.lower() for k in ['ttl', 'bytes', '字节', 'from']):
                     self._log(f"  {line}", "info")
                     continue
@@ -380,7 +392,7 @@ class PingApp:
             avg = sum(self.rtts) / len(self.rtts)
             mn, mx = min(self.rtts), max(self.rtts)
             if len(self.rtts) > 1:
-                var = sum((x - avg)**2 for x in self.rtts) / len(self.rtts)
+                var = sum((x - avg) ** 2 for x in self.rtts) / len(self.rtts)
                 mdev = var ** 0.5
             else:
                 mdev = 0
@@ -393,7 +405,7 @@ class PingApp:
 
     def _tick(self):
         if self.running:
-            self.st["time"].config(text=f"{time.time()-self.start_time:.0f}s", fg=C["blue"])
+            self.st["time"].config(text=f"{time.time() - self.start_time:.0f}s", fg=C["blue"])
             self.root.after(500, self._tick)
 
     def _update(self):
@@ -412,17 +424,22 @@ class PingApp:
 
     def _stop(self):
         self.running = False
+        self._status("正在停止...", C["yellow"])
+        # 让子线程自然退出，延迟后兜底 kill
+        self.root.after(500, self._force_kill)
+
+    def _force_kill(self):
         if self.process:
             try:
                 self.process.kill()
-            except:
+            except Exception:
                 pass
         self._status("已停止", C["yellow"])
 
     def _done(self):
         self.btn_go.config(state="normal")
         self.btn_stop.config(state="disabled")
-        self.st["time"].config(text=f"{time.time()-self.start_time:.1f}s", fg=C["blue"])
+        self.st["time"].config(text=f"{time.time() - self.start_time:.1f}s", fg=C["blue"])
         self._status("完成", C["green"])
 
     def _clear(self):
@@ -431,7 +448,7 @@ class PingApp:
         self.txt.config(state="disabled")
         self.sent = self.recv = 0
         self.rtts = []
-        for k, v in [("sent","0"),("recv","0"),("loss","0%"),("min","-"),("avg","-"),("max","-"),("time","0s")]:
+        for k, v in [("sent", "0"), ("recv", "0"), ("loss", "0%"), ("min", "-"), ("avg", "-"), ("max", "-"), ("time", "0s")]:
             self.st[k].config(text=v, fg=C["fg"])
         self._status("已清空", C["dim"])
 
@@ -468,7 +485,7 @@ class PingApp:
         if self.process:
             try:
                 self.process.kill()
-            except:
+            except Exception:
                 pass
         self.root.destroy()
 
