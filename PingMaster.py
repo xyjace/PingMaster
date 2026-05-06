@@ -476,6 +476,7 @@ class PingApp:
         self._kill_job = self.root.after(500, self._force_kill)
 
     def _force_kill(self):
+        self._kill_job = None
         if self.process:
             try:
                 self.process.kill()
