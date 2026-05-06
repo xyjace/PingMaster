@@ -46,6 +46,7 @@ class PingApp:
 
         self.running = False
         self.process = None
+        self._kill_job = None
         self.sent = 0
         self.recv = 0
         self.rtts = []
@@ -180,6 +181,7 @@ class PingApp:
         e._ph = ph
         e.bind("<FocusIn>", lambda ev, e=e: self._ph_in(e))
         e.bind("<FocusOut>", lambda ev, e=e: self._ph_out(e))
+        e.bind("<Button-3>", lambda ev, e=e: self._entry_ctx(ev, e))
         return e
 
     def _ph_in(self, e):
@@ -196,6 +198,48 @@ class PingApp:
         if e.cget("fg") == C["dim"]:
             return ""
         return e.get().strip()
+
+    def _entry_ctx(self, event, entry):
+        """输入框右键菜单：剪切、复制、粘贴、全选"""
+        menu = tk.Menu(self.root, tearoff=0, font=FN,
+                        bg=C["card"], fg=C["fg"],
+                        activebackground=C["accent"], activeforeground="#fff")
+        # 粘贴前先清除占位符
+        def do_paste():
+            self._ph_in(entry)
+            try:
+                entry.insert(tk.INSERT, self.root.clipboard_get())
+            except tk.TclError:
+                pass
+        def do_cut():
+            if entry.cget("fg") == C["dim"]:
+                return
+            try:
+                sel = entry.selection_get()
+                self.root.clipboard_clear()
+                self.root.clipboard_append(sel)
+                entry.delete("sel.first", "sel.last")
+            except tk.TclError:
+                pass
+        def do_copy():
+            try:
+                sel = entry.selection_get()
+                self.root.clipboard_clear()
+                self.root.clipboard_append(sel)
+            except tk.TclError:
+                pass
+        def do_select_all():
+            self._ph_in(entry)
+            entry.select_range(0, "end")
+            entry.icursor("end")
+
+        menu.add_command(label="剪切  Ctrl+X", command=do_cut)
+        menu.add_command(label="复制  Ctrl+C", command=do_copy)
+        menu.add_command(label="粘贴  Ctrl+V", command=do_paste)
+        menu.add_separator()
+        menu.add_command(label="全选  Ctrl+A", command=do_select_all)
+        menu.tk_popup(event.x_root, event.y_root)
+        menu.grab_release()
 
     def _btn(self, p, text, color, cmd, state="normal"):
         b = tk.Button(p, text=text, font=FB, fg="#2d2d2d", bg=color,
@@ -429,7 +473,7 @@ class PingApp:
         self.running = False
         self._status("正在停止...", C["yellow"])
         # 让子线程自然退出，延迟后兜底 kill
-        self.root.after(500, self._force_kill)
+        self._kill_job = self.root.after(500, self._force_kill)
 
     def _force_kill(self):
         if self.process:
@@ -485,6 +529,11 @@ class PingApp:
 
     def _on_close(self):
         self.running = False
+        if self._kill_job:
+            try:
+                self.root.after_cancel(self._kill_job)
+            except Exception:
+                pass
         if self.process:
             try:
                 self.process.kill()
