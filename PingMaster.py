@@ -325,10 +325,13 @@ class PingApp:
 
         try:
             enc = (locale.getpreferredencoding() or "gbk") if sys.platform == "win32" else "utf-8"
-            self.process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            popen_kw = dict(
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding=enc, errors="replace"
             )
+            if sys.platform == "win32":
+                popen_kw["creationflags"] = subprocess.CREATE_NO_WINDOW
+            self.process = subprocess.Popen(cmd, **popen_kw)
 
             for line in self.process.stdout:
                 if not self.running:
